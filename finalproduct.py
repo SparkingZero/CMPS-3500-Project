@@ -98,7 +98,7 @@ def clean_data():
 
     df = training_data.copy()
 
-    # Begin cleaning
+    # Begin cleaning with the changing of strings and such
     df = df.set_index('DR_NO')
     df = df.rename_axis('DR_NO_INDEX')
     df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
@@ -147,6 +147,7 @@ def clean_data():
     df['TEMP'] = pd.to_datetime(df['TIME OCC'], format='%H%M')
     df['HOUR'] = df['TEMP'].dt.hour
 
+    #this is the mapping of hours so it can help the time and machine
     def map_time_numeric(hour):
         if 0 <= hour < 6:
             return 0  # Early Morning
@@ -159,6 +160,7 @@ def clean_data():
 
     df['Time_Bucket_Num'] = df['HOUR'].apply(map_time_numeric)
 
+    #this is for the months to group the months in the different seasons
     def month_to_season_numeric(month):
         if month in [12, 1, 2]:
             return 0
@@ -175,8 +177,9 @@ def clean_data():
     #df = df.loc[:, ~df.columns.str.contains('HOUR')]
     
 
-    df = df.drop_duplicates()
+    df = df.drop_duplicates() #dropping
 
+    
     #debugging showing what is acutally dropped in the rows
     #total_count = len(df)
    # for column in df.columns:
@@ -184,7 +187,7 @@ def clean_data():
        # null_percentage = round((null_count / total_count) * 100, 1)
         #print(f"Column '{column}': {null_percentage} % of null values")
 
-    # Filter out invalid or missing values
+    # Filter out invalid or missing values or data cleaning
     df.loc[df['Weapon Used Cd'].isna(), 'Weapon Used Cd'] = 0
     df = df[(df['Vict Age'] != 0) & (df['Vict Age'].notna())]
     df = df[(df['Vict Sex'] != 'X') & (df['Vict Sex'] != 'H') & (df['Vict Sex'].notna())]
@@ -205,7 +208,7 @@ def clean_data():
     print(f"Time to process is: {round(time.time() - start_time, 2)} seconds")
 
 
-# Adds new informative features to help the model learn patterns
+# Adds new informative features to help the model learn patterns for FE
 def feature_engineer(df):
 
     df['WEEKDAY'] = df['DATE OCC'].dt.weekday
@@ -224,9 +227,10 @@ def train_neural_network():
     global cleaned_data, model, encoder, target_encoder, scaler, X, Y
 
     if cleaned_data is None:
-        print("Please clean the training data first using Option (2).")
+        print("Please clean the training data first using Option (2).") #if wrong thing is entered
         return
 
+    #imports for the code and reason for here is debugging
     from sklearn.preprocessing import OneHotEncoder, MinMaxScaler
     from sklearn.utils.class_weight import compute_class_weight
     from keras.models import Sequential
@@ -238,8 +242,8 @@ def train_neural_network():
     start_time = time.time()
     timestamp("Training Neural Network")
 
-    cleaned_data = feature_engineer(cleaned_data)
-    # Variables
+    cleaned_data = feature_engineer(cleaned_data) #FE
+    # Variables for everything like num and cat
     target = ['Status']
     numerical = ['AREA', 'Rpt Dist No', 'Crm Cd', 'Vict Age', 'Premis Cd', 'Weapon Used Cd', 'Time_Bucket_Num', 'Season_Num']
     categorical = ['Target','Is_Weekend', 'Crime_Hour_Bucket', 'Vict_Profile']
@@ -264,7 +268,7 @@ def train_neural_network():
     df[numerical] = scaler.fit_transform(df[numerical])
     X = df[features_in_model].values
 
-    # Build model
+    # Build model for a being of weighing
     model = Sequential()
     model.add(Dense(38, input_dim=X.shape[1], activation='relu'))
     model.add(Dropout(0.2))
@@ -281,12 +285,14 @@ def train_neural_network():
     weights = compute_class_weight(class_weight='balanced', classes=classes, y=cleaned_data['Status'])
     class_weights = dict(zip(range(len(classes)), weights))
 
-    #early stop:
+    #early stop if the code gets to noisy
+
     early_stop = EarlyStopping(monitor='val_loss', patience=9, restore_best_weights=True)
-    # Train
+    
+    # Train information
     history = model.fit(X, Y, epochs=30, batch_size=32, validation_split=0.2, class_weight=class_weights, callbacks=[early_stop], verbose=0) #stops all that text stuff with verbose)
 
-    # Plot
+    # Plotting
     plt.figure(figsize=(12, 4))
     plt.subplot(1, 2, 1)
     plt.plot(history.history['accuracy'], label='Train Accuracy')
@@ -307,6 +313,7 @@ def train_neural_network():
     plt.tight_layout()
     plt.show()
 
+    #stop if it takes to long for error handling
     timestamp("Training completed.")
     elapsed = round(time.time() - start_time, 2)
     if elapsed > 90:
@@ -317,6 +324,7 @@ def train_neural_network():
     y_pred = target_encoder.inverse_transform(preds)
     y_true = target_encoder.inverse_transform(Y)
 
+    #all the info with acc and prec
     acc = accuracy_score(y_true, y_pred)
     prec = precision_score(y_true, y_pred, average='macro')
     rec = recall_score(y_true, y_pred, average='macro')
@@ -360,7 +368,7 @@ def load_testing_data():
         else:
             good_dir_check = 1
 
-
+        #csv loading
         csv_files = glob.glob(os.path.join(select_dir, "*.csv"))
         if(len(csv_files) == 0):
             print("Error - No CSV files in this directory. Please try another directory")
