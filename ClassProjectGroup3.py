@@ -7,6 +7,7 @@ import seaborn as sns
 import os
 import time
 import glob
+import concurrent.futures
 from datetime import datetime
 
 # Global Variables as these are share checks for debugging and ending things
@@ -25,6 +26,10 @@ predictions_df = None                 # Output predictions
 #Timestamp Helper
 def timestamp(msg):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+
+def read_csv(file_path):                # Function for timing the read of csv
+#    time.sleep(35)                     # Uncomment for the testing of >20 secs read time
+    return pd.read_csv(file_path)
 
 #Option (1) - Load Training Data
 def load_training_data():
@@ -67,7 +72,40 @@ def load_training_data():
         start_time = time.time()
         timestamp("Starting Script")
         try:
-            training_data = pd.read_csv(csv_files[int(csv_in)])
+            # training_data = pd.read_csv(csv_files[int(csv_in)])
+            # START OF ERROR HANDLING #
+
+            # Checking for how long csv file takes to read #
+            max_read_seconds = 20
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(read_csv, csv_files[int(csv_in)])
+                try:
+                    training_data = future.result(timeout=max_read_seconds)
+                except concurrent.futures.TimeoutError:
+                    print("CSV File has Taken longer than 20 secs to read, cancelled read\n"
+                    "Please choose a different CSV File to load")
+                    return None
+                
+            # Checking for if there are columns in CSV but no rows
+            if len(training_data) == 0 and len(training_data.columns) > 0:
+                print("CSV File has columns but no row data, cancelled read\n"
+                "Please choose a different CSV File to load")
+                return None
+
+            # Check for if a column has a constant value for all rows
+            for columns in training_data.columns:
+                if training_data[columns].eq(training_data[columns].iloc[0]).all():
+                    print(f"Column {columns} in CSV has a constant value for all rows, can lead to possible division"
+                          "by 0 errors and also adversely affect training. Please choose a different CSV File to load")
+                    return None
+                    
+            # Checking for rows with missing entries, will still let you load the CSV #
+            for columns in training_data.columns:
+                if training_data[columns].isnull().any():
+                    print(f"Column '{columns}' has missing values in the following rows:")
+                    print(training_data[training_data[columns].isnull()])
+            
+            # END OF ERROR HANDLING #
             timestamp("Loading training data set")
             timestamp(f"Total Columns Read: {len(training_data.columns)}")
             timestamp(f"Total Rows Read: {len(training_data)}")
@@ -88,119 +126,136 @@ def clean_data():
     df = training_data.copy()
 
     # Begin cleaning
-    df = df.set_index('DR_NO')
-    df = df.rename_axis('DR_NO_INDEX')
-    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-    df['Date Rptd'] = df['Date Rptd'].apply(lambda x: datetime.strptime(x, '%m/%d/%Y %I:%M:%S %p'))
-    df['DATE OCC'] = df['DATE OCC'].apply(lambda x: datetime.strptime(x, '%Y-%m-%d'))
-    df['AREA NAME'] = df['AREA NAME'].astype('string')
-    df['Crm Cd Desc'] = df['Crm Cd Desc'].astype('string')
-    df['Mocodes'] = df['Mocodes'].astype('string')
-    df['Vict Sex'] = df['Vict Sex'].astype('string')
-    df['Vict Descent'] = df['Vict Descent'].astype('string')
-    df['Premis Desc'] = df['Premis Desc'].astype('string')
-    df['Weapon Desc'] = df['Weapon Desc'].astype('string')
-    df['Status'] = df['Status'].astype('string')
-    df['Status Desc'] = df['Status Desc'].astype('string')
+    # Error Handling - This Try and Except statement should pick up any formula errors during cleaning
+    try:
+        df = df.set_index('DR_NO')
+        df = df.rename_axis('DR_NO_INDEX')
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        df['Date Rptd'] = df['Date Rptd'].apply(lambda x: datetime.strptime(x, '%m/%d/%Y %I:%M:%S %p'))
+        df['DATE OCC'] = df['DATE OCC'].apply(lambda x: datetime.strptime(x, '%Y-%m-%d'))
+        df['AREA NAME'] = df['AREA NAME'].astype('string')
+        df['Crm Cd Desc'] = df['Crm Cd Desc'].astype('string')
+        df['Mocodes'] = df['Mocodes'].astype('string')
+        df['Vict Sex'] = df['Vict Sex'].astype('string')
+        df['Vict Descent'] = df['Vict Descent'].astype('string')
+        df['Premis Desc'] = df['Premis Desc'].astype('string')
+        df['Weapon Desc'] = df['Weapon Desc'].astype('string')
+        df['Status'] = df['Status'].astype('string')
+        df['Status Desc'] = df['Status Desc'].astype('string')
 
-    mapping = {
-            'IC': 'No Arrest',
-            'AA': 'Arrest',
-            'AO': 'No Arrest',
-            'JO': 'No Arrest',
-            'JA': 'Arrest',
-            'CC': 'No Arrest'
-            }
-    df['Target'] = df['Status'].map(mapping)
+        mapping = {
+                'IC': 'No Arrest',
+                'AA': 'Arrest',
+                'AO': 'No Arrest',
+                'JO': 'No Arrest',
+                'JA': 'Arrest',
+                'CC': 'No Arrest'
+                }
+        df['Target'] = df['Status'].map(mapping)
 
-    #fill missing monocodes and count how many were recorded per incident
-    df['Mocodes'] = df['Mocodes'].fillna('Unknown')
-    df['Num_Mocodes'] = df['Mocodes'].apply(lambda x: 0 if x == 'Unknown' else len(x.split()))
+        #fill missing monocodes and count how many were recorded per incident
+        df['Mocodes'] = df['Mocodes'].fillna('Unknown')
+        df['Num_Mocodes'] = df['Mocodes'].apply(lambda x: 0 if x == 'Unknown' else len(x.split()))
 
-    #dropping columns that are desc but not used in training
-    df = df.loc[:, ~df.columns.str.contains('AREA NAME')]
-    df = df.loc[:, ~df.columns.str.contains('Part 1-2')]
-    df = df.loc[:, ~df.columns.str.contains('Crm Cd Desc')]
-    df = df.loc[:, ~df.columns.str.contains('Premis Desc')]
-    df = df.loc[:, ~df.columns.str.contains('Weapon Desc')]
-    df = df.loc[:, ~df.columns.str.contains('Status Desc')]
-    df = df.loc[:, ~df.columns.str.contains('Date Rptd')]
+        #dropping columns that are desc but not used in training
+        df = df.loc[:, ~df.columns.str.contains('AREA NAME')]
+        df = df.loc[:, ~df.columns.str.contains('Part 1-2')]
+        df = df.loc[:, ~df.columns.str.contains('Crm Cd Desc')]
+        df = df.loc[:, ~df.columns.str.contains('Premis Desc')]
+        df = df.loc[:, ~df.columns.str.contains('Weapon Desc')]
+        df = df.loc[:, ~df.columns.str.contains('Status Desc')]
+        df = df.loc[:, ~df.columns.str.contains('Date Rptd')]
 
-     # Extract month from DATE OCC
-    df['MONTH OCC'] = df['DATE OCC'].dt.month
-    #df = df.loc[:, ~df.columns.str.contains('DATE OCC')]
+        # Extract month from DATE OCC
+        df['MONTH OCC'] = df['DATE OCC'].dt.month
+        #df = df.loc[:, ~df.columns.str.contains('DATE OCC')]
 
-    df['TIME OCC'] = df['TIME OCC'].astype('string')
-    df['TIME OCC'] = df['TIME OCC'].str.zfill(4)
-    df['TEMP'] = pd.to_datetime(df['TIME OCC'], format='%H%M')
-    df['HOUR'] = df['TEMP'].dt.hour
+        df['TIME OCC'] = df['TIME OCC'].astype('string')
+        df['TIME OCC'] = df['TIME OCC'].str.zfill(4)
+        df['TEMP'] = pd.to_datetime(df['TIME OCC'], format='%H%M')
+        df['HOUR'] = df['TEMP'].dt.hour
 
-    def MappingTime(hour):
-        if 0 <= hour < 6:
-            return 'EM'   # Early Morning
-        elif 6 <= hour < 12:
-            return 'M'    # Morning
-        elif 12 <= hour < 18:
-            return 'AN'   # Afternoon
-        elif 18 <= hour < 24:
-            return 'N'    # Night
+        def MappingTime(hour):
+            if 0 <= hour < 6:
+                return 'EM'   # Early Morning
+            elif 6 <= hour < 12:
+                return 'M'    # Morning
+            elif 12 <= hour < 18:
+                return 'AN'   # Afternoon
+            elif 18 <= hour < 24:
+                return 'N'    # Night
 
-    df['TIME PERIOD OCC'] = df['HOUR'].apply(MappingTime)
-    df = df.loc[:, ~df.columns.str.contains('TIME OCC')]
-    df = df.loc[:, ~df.columns.str.contains('TEMP')]
-    #df = df.loc[:, ~df.columns.str.contains('HOUR')]
-    df['TIME PERIOD OCC'] = df['TIME PERIOD OCC'].astype('string')
+        df['TIME PERIOD OCC'] = df['HOUR'].apply(MappingTime)
+        df = df.loc[:, ~df.columns.str.contains('TIME OCC')]
+        df = df.loc[:, ~df.columns.str.contains('TEMP')]
+        #df = df.loc[:, ~df.columns.str.contains('HOUR')]
+        df['TIME PERIOD OCC'] = df['TIME PERIOD OCC'].astype('string')
 
-    df = df.drop_duplicates()
+        df = df.drop_duplicates()
 
-    total_count = len(df)
-    for column in df.columns:
-        null_count = df[column].isnull().sum()
-        null_percentage = round((null_count / total_count) * 100, 1)
-        print(f"Column '{column}': {null_percentage} % of null values")
+        total_count = len(df)
+    
+        # Error Handling for potential division by 0 errors
+        if total_count == 0:
+            for column in df.columns:
+                print(f"Column '{column}': 100 % of null values")
+        else:
+            for column in df.columns:
+                null_count = df[column].isnull().sum()
+                null_percentage = round((null_count / total_count) * 100, 1)
+                print(f"Column '{column}': {null_percentage} % of null values")
 
-    # Filter out invalid or missing values
-    df.loc[df['Weapon Used Cd'].isna(), 'Weapon Used Cd'] = 0
-    df = df[(df['Vict Age'] != 0) & (df['Vict Age'].notna())]
-    df = df[(df['Vict Sex'] != 'X') & (df['Vict Sex'] != 'H') & (df['Vict Sex'].notna())]
-    df = df[(df['Vict Descent'] != '-') & (df['Vict Descent'].notna())]
-    df = df.dropna()
-    df = df[df['Vict Age'] > 5]
-    df = df[df['Vict Age'] < 90]
+        # Filter out invalid or missing values
+        df.loc[df['Weapon Used Cd'].isna(), 'Weapon Used Cd'] = 0
+        df = df[(df['Vict Age'] != 0) & (df['Vict Age'].notna())]
+        df = df[(df['Vict Sex'] != 'X') & (df['Vict Sex'] != 'H') & (df['Vict Sex'].notna())]
+        df = df[(df['Vict Descent'] != '-') & (df['Vict Descent'].notna())]
+        df = df.dropna()
+        df = df[df['Vict Age'] > 5]
+        df = df[df['Vict Age'] < 90]
 
-    crm_count = df['Crm Cd'].value_counts()
-    bad_crm = crm_count[crm_count >= 100].index
-    df = df[df['Crm Cd'].isin(bad_crm)]
+        crm_count = df['Crm Cd'].value_counts()
+        bad_crm = crm_count[crm_count >= 100].index
+        df = df[df['Crm Cd'].isin(bad_crm)]
 
-    df = df[df['Status'] != 'CC']
+        df = df[df['Status'] != 'CC']
 
-    df.to_csv('stupid1.csv', index=True)
-    cleaned_data = df
-    timestamp(f"Total Rows after cleaning is: {len(df)}")
-    print(f"Time to process is: {round(time.time() - start_time, 2)} seconds")
+        df.to_csv('stupid1.csv', index=True)
+        cleaned_data = df
+        timestamp(f"Total Rows after cleaning is: {len(df)}")
+        print(f"Time to process is: {round(time.time() - start_time, 2)} seconds")
+    except Exception as e:
+        print("Cleaning failed:", e)
 
 # Converts month (1–12) to a season label
 def month_to_season(month):
-    if month in [12, 1, 2]: return 'Winter'
-    elif month in [3, 4, 5]: return 'Spring'
-    elif month in [6, 7, 8]: return 'Summer'
-    else: return 'Fall'
+    # Error Handling - Adding Try statement to account for possible errors here
+    try:
+        if month in [12, 1, 2]: return 'Winter'
+        elif month in [3, 4, 5]: return 'Spring'
+        elif month in [6, 7, 8]: return 'Summer'
+        else: return 'Fall'
+    except Exception as e:
+        print("Error during conversion of months to seasons: ", e)
 
 
 # Adds new informative features to help the model learn patterns
 def feature_engineer(df):
     df['Season'] = df['MONTH OCC'].apply(month_to_season)
 
-    df['WEEKDAY'] = df['DATE OCC'].dt.weekday
-    df['Is_Weekend'] = df['WEEKDAY'].apply(lambda x: 'Weekend' if x >= 5 else 'Weekday')
+    # Error Handling for model learning features, month_to_season above already has error handling
+    try:
+        df['WEEKDAY'] = df['DATE OCC'].dt.weekday
+        df['Is_Weekend'] = df['WEEKDAY'].apply(lambda x: 'Weekend' if x >= 5 else 'Weekday')
 
-    df['Crime_Hour_Bucket'] = pd.cut(df['HOUR'], bins=[0, 6, 12, 18, 24],
-                                     labels=['Night', 'Morning', 'Afternoon', 'Evening'], include_lowest=True)
+        df['Crime_Hour_Bucket'] = pd.cut(df['HOUR'], bins=[0, 6, 12, 18, 24],
+                                        labels=['Night', 'Morning', 'Afternoon', 'Evening'], include_lowest=True)
 
-    df['Vict_Profile'] = df['Vict Sex'] + "_" + df['Vict Descent']
+        df['Vict_Profile'] = df['Vict Sex'] + "_" + df['Vict Descent']
 
-    return df
-
+        return df
+    except Exception as e:
+        print("Error during feature_engineer function: ", e)
 
 # Option (3) - Train Neural Network on the cleaned
 def train_neural_network():
@@ -331,7 +386,40 @@ def load_testing_data():
         start_time = time.time()
         timestamp("Starting Script")
         try:
-            testing_data = pd.read_csv(csv_files[int(csv_in)])
+            # testing_data = pd.read_csv(csv_files[int(csv_in)])
+            # START OF ERROR HANDLING #
+
+            # Checking for how long csv file takes to read #
+            max_read_seconds = 20
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(read_csv, csv_files[int(csv_in)])
+                try:
+                    testing_data = future.result(timeout=max_read_seconds)
+                except concurrent.futures.TimeoutError:
+                    print("CSV File has Taken longer than 20 secs to read, cancelled read\n"
+                    "Please choose a different CSV File to load")
+                    return None
+                
+            # Checking for if there are columns in CSV but no rows
+            if len(testing_data) == 0 and len(testing_data.columns) > 0:
+                print("CSV File has columns but no row data, cancelled read\n"
+                "Please choose a different CSV File to load")
+                return None
+
+            # Check for if a column has a constant value for all rows
+            for columns in testing_data.columns:
+                if testing_data[columns].eq(testing_data[columns].iloc[0]).all():
+                    print(f"Column {columns} in CSV has a constant value for all rows, can lead to possible division"
+                          "by 0 errors and also adversely affect training. Please choose a different CSV File to load")
+                    return None
+                    
+            # Checking for rows with missing entries #
+            for columns in testing_data.columns:
+                if testing_data[columns].isnull().any():
+                    print(f"Column '{columns}' has missing values in the following rows:")
+                    print(testing_data[testing_data[columns].isnull()])
+                            
+            # END OF ERROR HANDLING #
             timestamp("Loading testing data set")
             timestamp(f"Total Columns Read: {len(testing_data.columns)}")
             timestamp(f"Total Rows Read: {len(testing_data)}")
@@ -351,7 +439,7 @@ def clean_testing_data():
     timestamp("Performing Clean-Up on Testing Data")
 
     df = testing_data.copy()
-
+# Error Handling - This Try and Except statement should pick up any formula errors during cleaning
     try:
         df = df.set_index('DR_NO')
         df = df.rename_axis('DR_NO_INDEX')
