@@ -1,3 +1,10 @@
+# course: cmps3500
+# CLASS Project
+# PYTHON IMPLEMENTATION: BASIC DATA ANALYSIS
+# date: 05/07/2025
+# Student1: Isaac Pitts
+# description: Implementation of Neural Network
+
 #Libaray Imports
 import pandas as pd
 import numpy as np
@@ -228,6 +235,7 @@ def train_neural_network():
     import matplotlib.pyplot as plt
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
+    start_time = time.time()
     timestamp("Training Neural Network")
 
     cleaned_data = feature_engineer(cleaned_data)
@@ -300,6 +308,9 @@ def train_neural_network():
     plt.show()
 
     timestamp("Training completed.")
+    elapsed = round(time.time() - start_time, 2)
+    if elapsed > 90:
+        timestamp("Warning: Training took over 90 seconds")
 
     # Predict on training set to evaluate metrics
     preds = model.predict(X)
